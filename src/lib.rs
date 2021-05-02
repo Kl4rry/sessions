@@ -6,7 +6,7 @@ use actix_web::{
     http::{header::SET_COOKIE, HeaderValue},
     Error, FromRequest, HttpMessage, HttpRequest,
 };
-use futures_util::future::{ok, LocalBoxFuture, Ready};
+use futures_util::future::{err, ok, LocalBoxFuture, Ready};
 use mongodb::{bson::doc, Client};
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
@@ -15,6 +15,32 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use uuid::Uuid;
+
+pub struct SessionId(Uuid);
+
+impl From<SessionId> for Uuid {
+    fn from(session_id: SessionId) -> Self {
+        session_id.0
+    }
+}
+
+impl FromRequest for SessionId {
+    type Error = Error;
+    type Future = Ready<Result<Self, Error>>;
+    type Config = ();
+
+    #[inline]
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let extensions = req.extensions();
+        ok(SessionId(
+            match extensions.get::<InternalSession>() {
+                Some(internal_session) => internal_session,
+                None => return err(ErrorInternalServerError("unable to get indentifier")),
+            }
+            .id,
+        ))
+    }
+}
 
 #[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug)]
 #[repr(u8)]
@@ -55,8 +81,8 @@ impl FromRequest for User {
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         let extensions = req.extensions();
-        let interal_session = match extensions.get::<InteralSession>() {
-            Some(interal_session) => interal_session,
+        let internal_session = match extensions.get::<InternalSession>() {
+            Some(internal_session) => internal_session,
             None => {
                 return Box::pin(async move {
                     Err(ErrorInternalServerError("unable to get indentifier"))
@@ -64,8 +90,8 @@ impl FromRequest for User {
             }
         };
 
-        let users = interal_session.client.database("auth").collection("users");
-        let id = interal_session.id;
+        let users = internal_session.client.database("auth").collection("users");
+        let id = internal_session.id;
         Box::pin(async move {
             let result = users
                 .find_one(doc! {"sessions": id.to_hyphenated().to_string()}, None)
@@ -89,7 +115,7 @@ impl FromRequest for User {
     }
 }
 
-pub struct InteralSession {
+pub struct InternalSession {
     id: Uuid,
     client: Client,
 }
@@ -171,7 +197,7 @@ where
             None => Uuid::new_v4(),
         };
 
-        let interal_session = InteralSession {
+        let interal_session = InternalSession {
             id,
             client: self.inner.client.clone(),
         };
