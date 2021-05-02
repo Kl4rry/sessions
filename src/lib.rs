@@ -10,11 +10,11 @@ use futures_util::future::{err, ok, LocalBoxFuture, Ready};
 use mongodb::{bson::doc, Client};
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
+use uuid::Uuid;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use uuid::Uuid;
 
 pub struct SessionId(Uuid);
 
@@ -115,7 +115,7 @@ impl FromRequest for User {
     }
 }
 
-pub struct InternalSession {
+struct InternalSession {
     id: Uuid,
     client: Client,
 }
