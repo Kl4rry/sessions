@@ -17,7 +17,7 @@ mongodb = "1.1.1"
 actix-web = { version = "3.3.2", default_features = false, features = ["secure-cookies"] }
 actix-service = "1.0.6"
 cookie = { version = "0.15.0", features = ["secure", "percent-encode"] }
-futures-util = "0.3.14"
+futures-util = "*"
 serde_repr = "0.1.6"
 
 [features]
