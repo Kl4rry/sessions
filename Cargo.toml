@@ -21,4 +21,5 @@ futures-util = "*"
 serde_repr = "0.1.6"
 
 [features]
+default = ["secure"]
 secure = []
