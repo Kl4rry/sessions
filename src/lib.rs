@@ -33,6 +33,10 @@ pub struct User {
     pub email: String,
     pub birth: i64,
     pub permissions: Vec<Permission>,
+    #[serde(skip_serializing)]
+    pub password: String,
+    #[serde(skip_serializing)]
+    pub sessions: Vec<Uuid>,
 }
 
 pub fn parse_user(
