@@ -47,7 +47,7 @@ impl FromRequest for Id {
 }
 
 #[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug)]
-#[repr(u8)]
+#[repr(i32)]
 #[non_exhaustive]
 pub enum Permission {
     Admin = 0,
