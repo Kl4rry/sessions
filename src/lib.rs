@@ -16,15 +16,17 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-pub struct SessionId(Uuid);
+pub struct Id {
+    id: Uuid
+}
 
-impl From<SessionId> for Uuid {
-    fn from(session_id: SessionId) -> Self {
-        session_id.0
+impl From<Id> for Uuid {
+    fn from(session_id: Id) -> Self {
+        session_id.id
     }
 }
 
-impl FromRequest for SessionId {
+impl FromRequest for Id {
     type Error = Error;
     type Future = Ready<Result<Self, Error>>;
     type Config = ();
@@ -32,13 +34,15 @@ impl FromRequest for SessionId {
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         let extensions = req.extensions();
-        ok(SessionId(
-            match extensions.get::<InternalSession>() {
-                Some(internal_session) => internal_session,
-                None => return err(ErrorInternalServerError("unable to get indentifier")),
-            }
-            .id,
-        ))
+
+        let internal_session = match extensions.get::<InternalSession>() {
+            Some(internal_session) => internal_session,
+            None => return err(ErrorInternalServerError("unable to get indentifier")),
+        };
+
+        ok(Id {
+            id: internal_session.id
+        })
     }
 }
 
