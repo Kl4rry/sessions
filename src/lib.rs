@@ -215,6 +215,7 @@ where
                 let mut cookie = Cookie::new("session", id.to_hyphenated().to_string());
                 cookie.set_same_site(SameSite::Strict);
                 cookie.set_http_only(true);
+                cookie.set_path("/");
                 #[cfg(feature = "secure")]
                 cookie.set_secure(true);
                 cookie.make_permanent();
