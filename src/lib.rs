@@ -58,10 +58,10 @@ pub enum Permission {
 
 #[derive(Serialize, Deserialize)]
 pub struct User {
-    pub userid: Uuid,
+    pub id: Uuid,
     pub username: String,
     pub email: String,
-    pub birth: i64,
+    pub created_at: i64,
     pub permissions: Vec<Permission>,
     #[serde(skip_serializing)]
     pub password: String,
