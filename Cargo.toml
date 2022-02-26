@@ -7,18 +7,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serde = "1.0.125"
-futures = "0.3.9"
+serde = "1.0.136"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-validator = { version = "0.12", features = ["derive", "unic"] }
-actix-web-validator = "2.0.3"
 regex = "1.4.3"
-mongodb = "1.1.1"
-actix-web = { version = "3.3.2", default_features = false, features = ["secure-cookies"] }
-actix-service = "1.0.6"
-cookie = { version = "0.15.0", features = ["secure", "percent-encode"] }
-futures-util = "*"
-serde_repr = "0.1.6"
+mongodb = "2.1.0"
+actix-web = { version = "4.0.1", default_features = false, features = ["secure-cookies"] }
+actix-service = "2.0.2"
+cookie = { version = "0.16.0", features = ["secure", "percent-encode"] }
+futures-util = "0.3.21"
+serde_repr = "0.1.7"
 
 [features]
 default = ["secure"]

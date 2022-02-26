@@ -1,23 +1,27 @@
+use std::{
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+};
+
 use actix_service::{Service, Transform};
-use actix_web::cookie::{Cookie, CookieJar, Key, SameSite};
 use actix_web::{
+    body::MessageBody,
+    cookie::{Cookie, CookieJar, Key, SameSite},
     dev::{Payload, ServiceRequest, ServiceResponse},
     error::{ErrorInternalServerError, ErrorUnauthorized},
-    http::{header::SET_COOKIE, HeaderValue},
+    http::header::{HeaderValue, SET_COOKIE},
     Error, FromRequest, HttpMessage, HttpRequest,
 };
 use futures_util::future::{err, ok, LocalBoxFuture, Ready};
-use mongodb::{bson::doc, Client};
+use mongodb::{bson, bson::doc, Client};
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
 use uuid::Uuid;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
 
 pub struct Id {
-    id: Uuid
+    id: Uuid,
 }
 
 impl From<Id> for Uuid {
@@ -29,7 +33,6 @@ impl From<Id> for Uuid {
 impl FromRequest for Id {
     type Error = Error;
     type Future = Ready<Result<Self, Error>>;
-    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
@@ -41,7 +44,7 @@ impl FromRequest for Id {
         };
 
         ok(Id {
-            id: internal_session.id
+            id: internal_session.id,
         })
     }
 }
@@ -69,18 +72,13 @@ pub struct User {
     pub sessions: Vec<Uuid>,
 }
 
-pub fn parse_user(
-    doc: mongodb::bson::document::Document,
-) -> Result<User, mongodb::bson::de::Error> {
-    Ok(mongodb::bson::from_bson(mongodb::bson::Bson::Document(
-        doc,
-    ))?)
+pub fn parse_user(doc: bson::document::Document) -> Result<User, bson::de::Error> {
+    bson::from_bson(bson::Bson::Document(doc))
 }
 
 impl FromRequest for User {
     type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
-    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
@@ -144,13 +142,13 @@ impl Session {
     }
 }
 
-impl<S, B: 'static> Transform<S> for Session
+impl<S, B> Transform<S, ServiceRequest> for Session
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>>,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>>,
     S::Future: 'static,
     S::Error: 'static,
+    B: MessageBody + 'static,
 {
-    type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
     type Error = S::Error;
     type InitError = ();
@@ -170,22 +168,22 @@ pub struct SessionMiddleware<S> {
     inner: Rc<InnerSession>,
 }
 
-impl<S, B: 'static> Service for SessionMiddleware<S>
+impl<S, B> Service<ServiceRequest> for SessionMiddleware<S>
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>>,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>>,
     S::Future: 'static,
     S::Error: 'static,
+    B: MessageBody + 'static,
 {
-    type Request = ServiceRequest;
     type Response = ServiceResponse<B>;
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&self, req: ServiceRequest) -> Self::Future {
         let mut id_opt: Option<Uuid> = None;
         let mut jar = CookieJar::new();
         if let Some(cookie) = req.cookie("session") {
@@ -201,11 +199,11 @@ where
             None => Uuid::new_v4(),
         };
 
-        let interal_session = InternalSession {
+        let internal_session = InternalSession {
             id,
             client: self.inner.client.clone(),
         };
-        req.extensions_mut().insert(interal_session);
+        req.extensions_mut().insert(internal_session);
 
         let fut = self.service.call(req);
         let key = self.inner.key.clone();
@@ -219,7 +217,7 @@ where
                 #[cfg(feature = "secure")]
                 cookie.set_secure(true);
                 cookie.make_permanent();
-                jar.private(&key).add(cookie);
+                jar.private_mut(&key).add(cookie);
 
                 for cookie in jar.delta() {
                     let val = HeaderValue::from_str(&cookie.encoded().to_string()).unwrap();
