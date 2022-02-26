@@ -132,11 +132,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(client: Client, key: &[u8]) -> Self {
+    pub fn new(client: Client, key: Vec<u8>) -> Self {
         Self {
             inner: Rc::new(InnerSession {
                 client,
-                key: Key::derive_from(key),
+                key: Key::derive_from(&key),
             }),
         }
     }
