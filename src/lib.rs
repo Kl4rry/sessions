@@ -59,7 +59,7 @@ pub enum Permission {
     Recept = 3,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
