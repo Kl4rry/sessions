@@ -15,10 +15,9 @@ use actix_web::{
     Error, FromRequest, HttpMessage, HttpRequest,
 };
 use futures_util::future::{err, ok, LocalBoxFuture, Ready};
-use mongodb::{bson, bson::doc, Client};
+use mongodb::{bson, bson::doc, Client, bson::Uuid};
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
-use uuid::Uuid;
 
 pub struct Id {
     id: Uuid,
@@ -96,7 +95,7 @@ impl FromRequest for User {
         let id = internal_session.id;
         Box::pin(async move {
             let result = users
-                .find_one(doc! {"sessions": id.to_hyphenated().to_string()}, None)
+                .find_one(doc! {"sessions": id}, None)
                 .await;
 
             let doc_opt = match result {
@@ -196,7 +195,7 @@ where
 
         let id = match id_opt {
             Some(id) => id,
-            None => Uuid::new_v4(),
+            None => Uuid::new(),
         };
 
         let internal_session = InternalSession {
@@ -210,7 +209,7 @@ where
 
         Box::pin(async move {
             fut.await.map(|mut res| {
-                let mut cookie = Cookie::new("session", id.to_hyphenated().to_string());
+                let mut cookie = Cookie::new("session", id.to_string());
                 cookie.set_same_site(SameSite::Strict);
                 cookie.set_http_only(true);
                 cookie.set_path("/");

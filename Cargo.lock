@@ -1410,7 +1410,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_repr",
- "uuid",
 ]
 
 [[package]]
