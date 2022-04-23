@@ -3,6 +3,7 @@ use std::{
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use actix_service::{Service, Transform};
@@ -12,51 +13,30 @@ use actix_web::{
     dev::{Payload, ServiceRequest, ServiceResponse},
     error::{ErrorInternalServerError, ErrorUnauthorized},
     http::header::{HeaderValue, SET_COOKIE},
-    Error, FromRequest, HttpMessage, HttpRequest,
+    Error, FromRequest, HttpMessage, HttpRequest, HttpResponse,
 };
-use futures_util::future::{err, ok, LocalBoxFuture, Ready};
-use mongodb::{bson, bson::doc, Client, bson::Uuid};
+use bitflags::bitflags;
+use futures_util::future::{ok, LocalBoxFuture, Ready};
+use mongodb::{
+    bson,
+    bson::{doc, Uuid},
+    Client,
+};
 use serde::{Deserialize, Serialize};
-use serde_repr::*;
 
-pub struct Id {
-    id: Uuid,
-}
+const COOKIE_NAME: &str = "uid";
 
-impl From<Id> for Uuid {
-    fn from(session_id: Id) -> Self {
-        session_id.id
+bitflags! {
+    #[rustfmt::skip]
+    pub struct Permissions: i32 {
+        const ADMIN =   0b00000001;
+        const INVITE =  0b00000010;
+        const CLIP =    0b00000100;
+        const RECEPT =  0b00001000;
     }
 }
 
-impl FromRequest for Id {
-    type Error = Error;
-    type Future = Ready<Result<Self, Error>>;
-
-    #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        let extensions = req.extensions();
-
-        let internal_session = match extensions.get::<InternalSession>() {
-            Some(internal_session) => internal_session,
-            None => return err(ErrorInternalServerError("unable to get indentifier")),
-        };
-
-        ok(Id {
-            id: internal_session.id,
-        })
-    }
-}
-
-#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug)]
-#[repr(u8)]
-#[non_exhaustive]
-pub enum Permission {
-    Admin = 0,
-    Invite = 1,
-    UploadClip = 2,
-    Recept = 3,
-}
+bitflags_serde_shim::impl_serde_for_bitflags!(Permissions);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
@@ -64,11 +44,26 @@ pub struct User {
     pub username: String,
     pub email: String,
     pub created_at: i64,
-    pub permissions: Vec<Permission>,
+    pub permissions: Permissions,
     #[serde(skip_serializing)]
     pub password: String,
-    #[serde(skip_serializing)]
-    pub sessions: Vec<Uuid>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+struct SessionData {
+    uid: Uuid,
+    created_at: u64,
+}
+
+impl SessionData {
+    fn new(uid: Uuid) -> Self {
+        let start = SystemTime::now();
+        let since_the_epoch = start.duration_since(UNIX_EPOCH).unwrap();
+        Self {
+            uid,
+            created_at: since_the_epoch.as_secs(),
+        }
+    }
 }
 
 pub fn parse_user(doc: bson::document::Document) -> Result<User, bson::de::Error> {
@@ -92,11 +87,15 @@ impl FromRequest for User {
         };
 
         let users = internal_session.client.database("auth").collection("users");
-        let id = internal_session.id;
+        let session_data = internal_session.session_data;
+
         Box::pin(async move {
-            let result = users
-                .find_one(doc! {"sessions": id}, None)
-                .await;
+            let session_data = match session_data {
+                Some(data) => data,
+                None => return Err(ErrorUnauthorized("not logged in")),
+            };
+
+            let result = users.find_one(doc! {"id": session_data.uid}, None).await;
 
             let doc_opt = match result {
                 Ok(doc_opt) => doc_opt,
@@ -117,7 +116,9 @@ impl FromRequest for User {
 }
 
 struct InternalSession {
-    id: Uuid,
+    jar: CookieJar,
+    session_data: Option<SessionData>,
+    key: Key,
     client: Client,
 }
 
@@ -183,47 +184,74 @@ where
     }
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let mut id_opt: Option<Uuid> = None;
+        let mut session_data: Option<SessionData> = None;
         let mut jar = CookieJar::new();
-        if let Some(cookie) = req.cookie("session") {
-            jar.add_original(cookie);
-            let cookie_opt = jar.private(&self.inner.key).get("session");
-            if let Some(cookie) = cookie_opt {
-                id_opt = Uuid::parse_str(cookie.value()).ok();
+        if let Some(cookie) = req.cookie(COOKIE_NAME) {
+            jar.add_original(cookie.clone());
+            match jar.private(&self.inner.key).get(COOKIE_NAME) {
+                Some(cookie) => match serde_json::from_str(cookie.value()) {
+                    Ok(s) => session_data = Some(s),
+                    Err(_) => jar.remove(cookie),
+                },
+                _ => jar.remove(cookie),
             }
         }
 
-        let id = match id_opt {
-            Some(id) => id,
-            None => Uuid::new(),
-        };
-
         let internal_session = InternalSession {
-            id,
+            jar,
+            session_data,
+            key: self.inner.key.clone(),
             client: self.inner.client.clone(),
         };
         req.extensions_mut().insert(internal_session);
-
-        let fut = self.service.call(req);
-        let key = self.inner.key.clone();
-
-        Box::pin(async move {
-            fut.await.map(|mut res| {
-                let mut cookie = Cookie::new("session", id.to_string());
-                cookie.set_same_site(SameSite::Strict);
-                cookie.set_http_only(true);
-                cookie.set_path("/");
-                #[cfg(feature = "secure")]
-                cookie.set_secure(true);
-                cookie.make_permanent();
-                jar.private_mut(&key).add(cookie);
-
-                for cookie in jar.delta() {
-                    let val = HeaderValue::from_str(&cookie.encoded().to_string()).unwrap();
-                    res.headers_mut().append(SET_COOKIE, val);
-                }
-                res
-            })
-        })
+        Box::pin(self.service.call(req))
     }
+}
+
+pub fn set_logged_in(req: &mut HttpRequest, mut res: HttpResponse, user: &User) -> HttpResponse {
+    let mut extensions = req.extensions_mut();
+    let internal_session = match extensions.get_mut::<InternalSession>() {
+        Some(internal_session) => internal_session,
+        None => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let session_data = SessionData::new(user.id);
+    let mut cookie = Cookie::new(COOKIE_NAME, serde_json::to_string(&session_data).unwrap());
+    cookie.set_same_site(SameSite::Strict);
+    cookie.set_http_only(true);
+    cookie.set_path("/");
+    #[cfg(feature = "secure")]
+    cookie.set_secure(true);
+    cookie.make_permanent();
+    internal_session
+        .jar
+        .private_mut(&internal_session.key)
+        .add(cookie);
+
+    for cookie in internal_session.jar.delta() {
+        let val = HeaderValue::from_str(&cookie.encoded().to_string()).unwrap();
+        res.headers_mut().append(SET_COOKIE, val);
+    }
+
+    res
+}
+
+pub fn logout(req: &mut HttpRequest) -> HttpResponse {
+    let mut extensions = req.extensions_mut();
+    let internal_session = match extensions.get_mut::<InternalSession>() {
+        Some(internal_session) => internal_session,
+        None => return HttpResponse::InternalServerError().finish(),
+    };
+
+    if let Some(cookie) = internal_session.jar.get(COOKIE_NAME) {
+        let cookie = cookie.clone();
+        internal_session.jar.remove(cookie);
+    }
+
+    let mut res = HttpResponse::Ok().finish();
+    for cookie in internal_session.jar.delta() {
+        let val = HeaderValue::from_str(&cookie.encoded().to_string()).unwrap();
+        res.headers_mut().append(SET_COOKIE, val);
+    }
+    res
 }
